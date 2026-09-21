@@ -1,0 +1,134 @@
+name: Update Mule Runtime Version Workflow Template
+
+on:
+  workflow_call:
+    inputs:
+      env_name:
+        description: The environment name input
+        type: string
+        default: dev
+      apis:
+        description: Comma-separated application names, or "all" to evaluate every deployed API
+        type: string
+        required: false
+        default: all
+      runtime_version:
+        description: Target Mule runtime version (e.g. 4.9.11:6-java17). Defaults to vars.RUNTIME_VERSION
+        type: string
+        required: false
+        default: ''
+      org_id:
+        description: Anypoint business-group organization ID. If empty, defaults to vars.ORG_ID
+        type: string
+        required: false
+        default: ''
+  workflow_dispatch:
+    inputs:
+      env_name:
+        description: The environment name input
+        type: string
+        required: true
+        default: dev
+      apis:
+        description: Comma-separated application names, or "all" to evaluate every deployed API
+        type: string
+        required: true
+        default: all
+      runtime_version:
+        description: Target Mule runtime version (e.g. 4.9.11:6-java17). Leave empty to use vars.RUNTIME_VERSION
+        type: string
+        required: false
+        default: ''
+      org_id:
+        description: Anypoint business-group organization ID. Leave empty to use vars.ORG_ID
+        type: string
+        required: false
+        default: ''
+
+jobs:
+
+  INITIALIZATION:
+    runs-on: self-hosted
+    environment: ${{ inputs.env_name }}
+    env:
+      ENV_NAME: ${{ inputs.env_name }}
+    outputs:
+      env_name: ${{ inputs.env_name }}
+      business_group_org_id: ${{ steps.vars_mapper.outputs.BUSINESS_GROUP_ORG_ID }}
+      anypoint_env: ${{ steps.vars_mapper.outputs.ANYPOINT_ENV }}
+      runtime_version: ${{ steps.vars_mapper.outputs.RUNTIME_VERSION }}
+      release_channel: ${{ steps.vars_mapper.outputs.RELEASE_CHANNEL }}
+    steps:
+      - name: Retrieve Variables
+        id: vars_mapper
+        env:
+          INPUT_ORG_ID: ${{ inputs.org_id }}
+          VAR_ORG_ID: ${{ vars.ORG_ID }}
+          INPUT_RUNTIME_VERSION: ${{ inputs.runtime_version }}
+          VAR_RUNTIME_VERSION: ${{ vars.RUNTIME_VERSION }}
+          ANYPOINT_ENV_MAP: ${{ vars.ANYPOINT_ENV_MAP }}
+          RELEASE_CHANNEL: ${{ vars.RELEASE_CHANNEL }}
+        run: |
+          BUSINESS_GROUP_ORG_ID="$INPUT_ORG_ID"
+          if [ -z "$BUSINESS_GROUP_ORG_ID" ]; then
+            BUSINESS_GROUP_ORG_ID="$VAR_ORG_ID"
+          fi
+          if [ -z "$BUSINESS_GROUP_ORG_ID" ] || [ "$BUSINESS_GROUP_ORG_ID" = "null" ]; then
+            echo "ERROR: org_id input is required when vars.ORG_ID is not set."
+            exit 1
+          fi
+
+          ANYPOINT_ENV=""
+          if [ -n "${ANYPOINT_ENV_MAP:-}" ]; then
+            ANYPOINT_ENV=$(echo "$ANYPOINT_ENV_MAP" | tr -d '\r\n' | jq -r --arg id "$BUSINESS_GROUP_ORG_ID" --arg env "$ENV_NAME" '.[$id][$env] // empty')
+          fi
+          if [ -z "$ANYPOINT_ENV" ] || [ "$ANYPOINT_ENV" = "null" ]; then
+            ANYPOINT_ENV="$ENV_NAME"
+          fi
+
+          RUNTIME_VERSION="$INPUT_RUNTIME_VERSION"
+          if [ -z "$RUNTIME_VERSION" ]; then
+            RUNTIME_VERSION="$VAR_RUNTIME_VERSION"
+          fi
+          if [ -z "$RUNTIME_VERSION" ] || [ "$RUNTIME_VERSION" = "null" ]; then
+            echo "ERROR: runtime_version input is required when vars.RUNTIME_VERSION is not set."
+            exit 1
+          fi
+
+          echo "BUSINESS_GROUP_ORG_ID=$BUSINESS_GROUP_ORG_ID" >> $GITHUB_OUTPUT
+          echo "ANYPOINT_ENV=$ANYPOINT_ENV" >> $GITHUB_OUTPUT
+          echo "RUNTIME_VERSION=$RUNTIME_VERSION" >> $GITHUB_OUTPUT
+          echo "RELEASE_CHANNEL=${RELEASE_CHANNEL:-}" >> $GITHUB_OUTPUT
+          echo "ORG_ID=$BUSINESS_GROUP_ORG_ID"
+          echo "ANYPOINT_ENV=$ANYPOINT_ENV"
+          echo "RUNTIME_VERSION=$RUNTIME_VERSION"
+          echo "RELEASE_CHANNEL=${RELEASE_CHANNEL:-}"
+
+  UPDATE_RUNTIME_VERSION:
+    needs: INITIALIZATION
+    if: |
+        always() && needs.initialization.result == 'success'
+    runs-on: self-hosted
+    steps:
+      - name: Checkout Shared-Runner-Templates Repository
+        uses: actions/checkout@v4
+        with:
+          repository: narendar-gaddam_sfemu/shared-runner-templates
+          path: shared
+          token: ${{ secrets.GH_SHARED_ACCESS_TOKEN }}
+          sparse-checkout: |
+            mulesoft/scripts
+          sparse-checkout-cone-mode: false
+
+      - name: Update API runtime versions
+        env:
+          ENV_NAME: ${{ needs.initialization.outputs.env_name }}
+          APIS: ${{ inputs.apis }}
+          RUNTIME_VERSION: ${{ needs.initialization.outputs.runtime_version }}
+          RELEASE_CHANNEL: ${{ needs.initialization.outputs.release_channel }}
+          BUSINESS_GROUP_ORG_ID: ${{ needs.initialization.outputs.business_group_org_id }}
+          ANYPOINT_ORG: ${{ needs.initialization.outputs.business_group_org_id }}
+          ANYPOINT_ENV: ${{ needs.initialization.outputs.anypoint_env }}
+          ANYPOINT_CLIENT_ID: ${{ secrets.CONNECTED_APP_ID }}
+          ANYPOINT_CLIENT_SECRET: ${{ secrets.CONNECTED_APP_SECRET }}
+        run: bash shared/mulesoft/scripts/update_runtime_version.sh
