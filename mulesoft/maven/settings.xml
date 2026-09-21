@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<settings xmlns="http://maven.apache.org/SETTINGS/1.1.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.1.0 http://maven.apache.org/xsd/settings-1.1.0.xsd">
+	<servers>
+		<server>
+	  		<username>~~~Client~~~</username> 
+	  		<password>${env.CONNECTED_APP_ID}~?~${env.CONNECTED_APP_SECRET}</password>
+	  		<id>anypoint-exchange-v3</id>
+		</server>
+		<server>
+	  		<username>~~~Client~~~</username> 
+	  		<password>${env.CONNECTED_APP_ID}~?~${env.CONNECTED_APP_SECRET}</password>
+	  		<id>exchange-server</id>
+		</server>
+		<server>
+	  		<username>~~~Client~~~</username> 
+	  		<password>${env.CONNECTED_APP_ID}~?~${env.CONNECTED_APP_SECRET}</password>
+	  		<id>Exchange2</id>
+		</server>
+		<server>
+	  		<username>~~~Client~~~</username> 
+	  		<password>${env.CONNECTED_APP_ID}~?~${env.CONNECTED_APP_SECRET}</password>
+	  		<id>Repository</id>
+		</server>		
+
+		<server>
+			<username>pankaj.jain</username>
+			<password>p_72et6JH1n0VIeK</password>
+			<id>releases-ee</id>
+			</server>
+
+	</servers>
+	<pluginGroups>
+		<pluginGroup>org.mule.tools</pluginGroup>
+	</pluginGroups>
+</settings>
