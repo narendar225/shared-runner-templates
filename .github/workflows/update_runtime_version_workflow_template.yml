@@ -110,15 +110,8 @@ jobs:
         always() && needs.initialization.result == 'success'
     runs-on: self-hosted
     steps:
-      - name: Checkout Shared-Runner-Templates Repository
+      - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          repository: narendar-gaddam_sfemu/shared-runner-templates
-          path: shared
-          token: ${{ secrets.GH_SHARED_ACCESS_TOKEN }}
-          sparse-checkout: |
-            mulesoft/scripts
-          sparse-checkout-cone-mode: false
 
       - name: Update API runtime versions
         env:
@@ -131,4 +124,4 @@ jobs:
           ANYPOINT_ENV: ${{ needs.initialization.outputs.anypoint_env }}
           ANYPOINT_CLIENT_ID: ${{ secrets.CONNECTED_APP_ID }}
           ANYPOINT_CLIENT_SECRET: ${{ secrets.CONNECTED_APP_SECRET }}
-        run: bash shared/mulesoft/scripts/update_runtime_version.sh
+        run: bash mulesoft/scripts/update_runtime_version.sh
