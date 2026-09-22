@@ -101,9 +101,25 @@ echo "Resolved environment '$ANYPOINT_ENV' -> $ENV_ID"
 # ---------------------------------------------------------------------------
 # 3. List all deployments (paginated)
 # ---------------------------------------------------------------------------
+json_array_length() {
+  jq -r 'if type == "array" then length else 0 end' 2>/dev/null || echo 0
+}
+
+extract_deployment_items() {
+  jq -c '
+    if type == "array" then .
+    elif (.items | type) == "array" then .items
+    elif (.data | type) == "array" then .data
+    else []
+    end
+  ' "$1" 2>/dev/null || echo '[]'
+}
+
 OFFSET=0
 LIMIT=100
-ALL_ITEMS="[]"
+ITEMS_FILE="$SUMMARY_DIR/all_items.json"
+echo '[]' > "$ITEMS_FILE"
+
 while true; do
   LIST_HTTP=$(curl -sS -o /tmp/anypoint_deployments.json -w "%{http_code}" \
     "${AMC_BASE}/${ENV_ID}/deployments?offset=${OFFSET}&limit=${LIMIT}" \
@@ -111,22 +127,29 @@ while true; do
     -H "Content-Type: application/json;charset=UTF-8" \
     -H "X-ANYPNT-ORG-ID: ${ANYPOINT_ORG}" \
     -H "X-ANYPNT-ENV-ID: ${ENV_ID}")
-  if [ "$LIST_HTTP" -lt 200 ] || [ "$LIST_HTTP" -ge 300 ]; then
-    echo "ERROR: Failed to list deployments (HTTP $LIST_HTTP)." >&2
+  if [ -z "$LIST_HTTP" ] || [ "$LIST_HTTP" -lt 200 ] || [ "$LIST_HTTP" -ge 300 ]; then
+    echo "ERROR: Failed to list deployments (HTTP ${LIST_HTTP:-empty})." >&2
     cat /tmp/anypoint_deployments.json >&2 || true
     exit 1
   fi
 
-  PAGE_ITEMS=$(jq -c 'if type == "array" then . else (.items // []) end' /tmp/anypoint_deployments.json)
-  COUNT=$(echo "$PAGE_ITEMS" | jq 'length')
-  ALL_ITEMS=$(jq -c --argjson a "$ALL_ITEMS" --argjson b "$PAGE_ITEMS" '$a + $b')
-  TOTAL=$(jq -r '.total // empty' /tmp/anypoint_deployments.json)
+  PAGE_ITEMS=$(extract_deployment_items /tmp/anypoint_deployments.json)
+  if [ -z "$PAGE_ITEMS" ]; then
+    PAGE_ITEMS='[]'
+  fi
+  echo "$PAGE_ITEMS" > /tmp/anypoint_page_items.json
+  jq -c -s 'add' "$ITEMS_FILE" /tmp/anypoint_page_items.json > "$ITEMS_FILE.tmp"
+  mv "$ITEMS_FILE.tmp" "$ITEMS_FILE"
+
+  COUNT=$(echo "$PAGE_ITEMS" | json_array_length)
+  COUNT="${COUNT:-0}"
+  TOTAL=$(jq -r '.total // empty' /tmp/anypoint_deployments.json 2>/dev/null || true)
   OFFSET=$((OFFSET + COUNT))
 
   if [ "$COUNT" -eq 0 ]; then
     break
   fi
-  if [ -n "$TOTAL" ] && [ "$OFFSET" -ge "$TOTAL" ]; then
+  if [ -n "$TOTAL" ] && [ "$TOTAL" -eq "$TOTAL" ] 2>/dev/null && [ "$OFFSET" -ge "$TOTAL" ]; then
     break
   fi
   if [ "$COUNT" -lt "$LIMIT" ]; then
@@ -134,11 +157,16 @@ while true; do
   fi
 done
 
-DEPLOYMENT_COUNT=$(echo "$ALL_ITEMS" | jq 'length')
+ALL_ITEMS=$(cat "$ITEMS_FILE")
+DEPLOYMENT_COUNT=$(echo "$ALL_ITEMS" | json_array_length)
+DEPLOYMENT_COUNT="${DEPLOYMENT_COUNT:-0}"
 echo "Found $DEPLOYMENT_COUNT deployment(s) in environment '$ANYPOINT_ENV'."
 
 if [ "$DEPLOYMENT_COUNT" -eq 0 ]; then
   echo "No deployments found. Nothing to update."
+  echo "List payload (truncated):"
+  head -c 2000 /tmp/anypoint_deployments.json || true
+  echo
   exit 0
 fi
 
@@ -189,7 +217,9 @@ else
   ' >> "$SUMMARY_DIR/not_found" || true
 fi
 
-TARGET_COUNT=$(echo "$TARGET_ITEMS" | jq 'length')
+TARGET_ITEMS="${TARGET_ITEMS:-[]}"
+TARGET_COUNT=$(echo "$TARGET_ITEMS" | json_array_length)
+TARGET_COUNT="${TARGET_COUNT:-0}"
 echo "Selected $TARGET_COUNT application(s) for runtime version check."
 
 if [ "$TARGET_COUNT" -eq 0 ]; then
