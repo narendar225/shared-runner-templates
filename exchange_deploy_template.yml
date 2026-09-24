@@ -1,0 +1,118 @@
+name: Common Mule Exchange Only Deploy Template
+
+on:
+  workflow_call:
+    inputs:
+      env_name:
+        description: The environment name input
+        type: string
+        default: dev
+
+jobs:
+  EXCHANGE_DEPLOY:
+    runs-on: [self-hosted, mulesoft]
+    container:
+      image: 658128351367.dkr.ecr.us-east-1.amazonaws.com/mulesoft-builder:latest
+      # This mounts the persistent .m2 volume from the host
+      options: --user root -v /home/ssm-user/.m2:/root/.m2
+    environment: ${{ inputs.env_name }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+            token: ${{ secrets.GITHUB_TOKEN }}
+            # fetch-depth: 0
+
+
+      - name: Checkout Shared-Runner-Templates Repository
+        uses: actions/checkout@v4
+        with:
+            repository: GADCH-Dev/shared-runner-templates
+            path: shared
+            # ref: dev
+            token: ${{ secrets.GH_SHARED_ACCESS_TOKEN }}
+            sparse-checkout: |
+              mulesoft/maven
+            sparse-checkout-cone-mode: false
+
+      # - name: Extract Group ID
+      #   id: extract_id
+      #   run: |
+      #     # This reads the first <groupId> after the <project> tag
+      #     ORG_ID=$(grep -m 1 '<groupId>' pom.xml | sed 's/.*<groupId>\(.*\)<\/groupId>.*/\1/' | xargs)
+      #     echo "ORG_ID: $ORG_ID"
+      #     echo "BUSINESS_GROUP_ORG_ID=$ORG_ID" >> $GITHUB_OUTPUT
+          
+      - name: Retrieve groupId, packaging and set profile_name
+        id: set-profile
+        env:
+          CONNECTED_APP_ID: ${{ secrets.CONNECTED_APP_ID }}
+          CONNECTED_APP_SECRET: ${{ secrets.CONNECTED_APP_SECRET }}
+        run: |
+          REPO_NAME=${GITHUB_REPOSITORY#*/}
+          # GROUP_ID=$(mvn help:evaluate -Dexpression=project.groupId -q -DforceStdout -s shared/mulesoft/maven/settings_v2.xml)
+          # PACKAGING=$(mvn help:evaluate -Dexpression=project.packaging -q -DforceStdout -s shared/mulesoft/maven/settings_v2.xml)
+
+          GROUP_ID=$(sed '/<parent>/,/<\/parent>/d' pom.xml | grep -m1 '<groupId>' | sed 's/.*<groupId>\(.*\)<\/groupId>.*/\1/' | tr -d '[:space:]')
+          PACKAGING=$(sed '/<parent>/,/<\/parent>/d' pom.xml | grep -m1 '<packaging>' | sed 's/.*<packaging>\(.*\)<\/packaging>.*/\1/' | tr -d '[:space:]')
+ 
+
+          echo "Detected groupId: $GROUP_ID, packaging: $PACKAGING"
+          
+          echo "BUSINESS_GROUP_ORG_ID=$GROUP_ID" >> "$GITHUB_OUTPUT"
+
+          if [ "$PACKAGING" = "pom" ]; then
+            if [ "$GROUP_ID" = "60044dfd-1ad9-414a-862e-4e6930344514" ]; then
+              echo "profile_name=root,deploy-to-exchange-v3" >> "$GITHUB_OUTPUT"
+            elif [ "$GROUP_ID" = "ce30abf9-f1d2-443c-9f53-2a5b99cb542e" ]; then
+              echo "profile_name=mesip-public,deploy-to-exchange-v3" >> "$GITHUB_OUTPUT"
+            elif [ "$GROUP_ID" = "b3d1f5f7-25b1-4df5-9897-c9e7e161cd7a" ]; then
+              echo "profile_name=mesip-internal,deploy-to-exchange-v3" >> "$GITHUB_OUTPUT"
+            else
+              echo "ERROR: Unknown groupId '$GROUP_ID' for pom packaging. Exiting."
+              exit 1
+            fi
+          else
+            if [ "$GROUP_ID" = "60044dfd-1ad9-414a-862e-4e6930344514" ]; then
+              echo "profile_name=root" >> "$GITHUB_OUTPUT"
+            elif [ "$GROUP_ID" = "ce30abf9-f1d2-443c-9f53-2a5b99cb542e" ]; then
+              echo "profile_name=mesip-public" >> "$GITHUB_OUTPUT"
+            elif [ "$GROUP_ID" = "b3d1f5f7-25b1-4df5-9897-c9e7e161cd7a" ]; then
+              echo "profile_name=mesip-internal" >> "$GITHUB_OUTPUT"
+            else
+              echo "ERROR: Unknown groupId '$GROUP_ID'. Exiting."
+              exit 1
+            fi
+          fi
+
+      - name: Print Profile Name 
+        run: |
+          echo "Profile Name: ${{ steps.set-profile.outputs.profile_name }}"
+      
+      - name: Publish SNAPSHOT to Exchange
+        if: (inputs.env_name == 'dev')    
+        run: mvn clean deploy -s shared/mulesoft/maven/settings_v2.xml -P ${{ steps.set-profile.outputs.profile_name }}
+        env:
+            CONNECTED_APP_ID: ${{ secrets.CONNECTED_APP_ID }}
+            CONNECTED_APP_SECRET: ${{ secrets.CONNECTED_APP_SECRET }}
+
+      - name: Publish RELEASED VERSION to Exchange
+        if: (inputs.env_name == 'prod')    
+      # release:prepare  — strips -SNAPSHOT, commits, tags, bumps to next SNAPSHOT, pushes
+        # release:perform  — checks out the tag, runs mvn deploy which fires
+        #                    exchange-pre-deploy (pre-integration-test) then
+        #                    exchange-deploy (deploy) to publish to Anypoint Exchange
+        env:
+            CONNECTED_APP_ID: ${{ secrets.CONNECTED_APP_ID }}
+            CONNECTED_APP_SECRET: ${{ secrets.CONNECTED_APP_SECRET }}
+            GH_USER_NAME: ${{ vars.GH_USER_NAME }}
+            GH_USER_EMAIL: ${{ vars.GH_USER_EMAIL }}
+            GH_REPOSITORY_ACCESS_TOKEN: ${{ secrets.GH_REPOSITORY_ACCESS_TOKEN }}
+
+        run: |
+            git config --global --add safe.directory "$GITHUB_WORKSPACE"
+            git config user.name "$GH_USER_NAME"
+            git config user.email "$GH_USER_EMAIL"
+            mvn -Dusername="$GH_USER_NAME" -Dpassword="$GH_REPOSITORY_ACCESS_TOKEN" --batch-mode release:prepare release:perform \
+            -s shared/mulesoft/maven/settings_v2.xml \
+            -Darguments="-s shared/mulesoft/maven/settings_v2.xml" -P ${{ steps.set-profile.outputs.profile_name }}
